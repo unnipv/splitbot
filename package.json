@@ -28,5 +28,6 @@
   "private": true,
   "engines": {
     "node": ">=22.18"
-  }
+  },
+  "license": "MIT"
 }

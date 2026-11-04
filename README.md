@@ -98,3 +98,7 @@ npm run typecheck
 Layout: `src/whatsapp.ts` (connection, triggers, media), `src/agent.ts` (prompt + tools), `src/vision.ts` (bill OCR), `src/split.ts` (share math), `src/splitwise.ts` (API), `src/db.ts` (SQLite via `node:sqlite`), `src/web/server.ts` + `public/` (dashboard).
 
 > Note: Baileys is an unofficial WhatsApp client. Using it on a spare number for a personal bot is common, but WhatsApp can ban numbers that act like spam bots. The bot only speaks when tagged.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
