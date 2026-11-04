@@ -91,9 +91,11 @@ async function callModel(ref: ModelRef, messages: ChatMessage[], opts: ChatOptio
     body.reasoning = effort === 'off' ? { enabled: false } : /^\d+$/.test(effort) ? { max_tokens: Number(effort) } : { effort };
   }
   if (effort && ref.provider === 'groq' && ref.model.startsWith('openai/gpt-oss')) body.reasoning_effort = effort;
+  if (effort && ref.provider === 'sarvam') body.reasoning_effort = effort === 'off' ? 'none' : effort;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` };
   if (ref.provider === 'openrouter') headers['X-Title'] = 'Splitbot';
+  if (ref.provider === 'sarvam') headers['api-subscription-key'] = provider.apiKey!;
 
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
@@ -150,6 +152,7 @@ function stripThinking(s: string) {
 
 export const agentModels = () => config.llm.agent;
 export const visionModels = () => config.llm.vision;
+export const roastModels = () => config.llm.roast;
 
 /** Parse JSON that a model may have wrapped in a ```json fence or surrounded with prose. */
 export function looseJson<T = unknown>(s: string): T {

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.ts';
 import type { Rejection } from './guard.ts';
-import { agentModels, chat } from './llm.ts';
+import { chat, roastModels } from './llm.ts';
 import { logger } from './log.ts';
 
 const log = logger('denial');
@@ -44,7 +44,7 @@ const LONG_MANGLISH = ['Ithrem neelam vende mone, oru line mathi: "dinner 2400" 
 const HELP =
   '🙅 I only handle trip expenses. Try _"dinner 2400"_, _"cab 600 me and Dev"_, send a bill photo, or ask _"who owes what?"_';
 
-const ROAST_PROMPT = `You are Splitbot, a sassy Malayali friend in a WhatsApp trip group who helps with expense tracking.
+export const ROAST_PROMPT = `You are Splitbot, a sassy Malayali friend in a WhatsApp trip group who helps with expense tracking.
 Someone tagged you with something that isn't about expenses. Turn them down with ONE playful roast.
 
 Style:
@@ -76,7 +76,7 @@ Reply with the roast line only.`;
 async function roast(name: string, text: string): Promise<string> {
   try {
     const res = await chat(
-      agentModels(),
+      roastModels(),
       [
         { role: 'system', content: ROAST_PROMPT },
         { role: 'user', content: `${name}: ${text.slice(0, 300)}` },

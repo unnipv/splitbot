@@ -14,10 +14,13 @@ const Env = z.object({
   GEMINI_API_KEY: z.string().optional(),
   DEEPSEEK_API_KEY: z.string().optional(),
   CEREBRAS_API_KEY: z.string().optional(),
+  SARVAM_API_KEY: z.string().optional(),
 
   // Ordered "provider:model" lists; each one falls back to the next (quota, outage, truncated reply).
   AGENT_MODELS: z.string().optional(),
   VISION_MODELS: z.string().optional(),
+  // Model chain for Manglish roasts only (DENIAL_STYLE=manglish). Defaults to Sarvam when its key is set.
+  ROAST_MODELS: z.string().optional(),
 
   BOT_TRIGGERS: z.string().default('@splitbot,splitbot'),
   DEFAULT_CURRENCY: z.string().default('INR'),
@@ -53,6 +56,8 @@ export const PROVIDERS = {
   gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKey: env.GEMINI_API_KEY },
   deepseek: { baseUrl: 'https://api.deepseek.com', apiKey: env.DEEPSEEK_API_KEY },
   cerebras: { baseUrl: 'https://api.cerebras.ai/v1', apiKey: env.CEREBRAS_API_KEY },
+  // Indian lab; strong at Indic languages incl. Malayalam and romanized code-mixed text.
+  sarvam: { baseUrl: 'https://api.sarvam.ai/v1', apiKey: env.SARVAM_API_KEY },
 } as const;
 export type ProviderName = keyof typeof PROVIDERS;
 
@@ -91,6 +96,10 @@ const defaultAgent = [
   'groq:openai/gpt-oss-120b@medium',
   'groq:openai/gpt-oss-20b@medium',
 ].filter(Boolean).join(',');
+const defaultRoast = [env.SARVAM_API_KEY && 'sarvam:sarvam-105b@off', defaultAgentFirst()].filter(Boolean).join(',');
+function defaultAgentFirst() {
+  return hasOpenRouter ? 'openrouter:deepseek/deepseek-v4.1-flash@off' : 'groq:openai/gpt-oss-120b@medium';
+}
 const defaultVision = [
   hasOpenRouter && 'openrouter:deepseek/deepseek-v4.1-flash@off',
   hasOpenRouter && 'openrouter:qwen/qwen3-vl-235b-a22b-instruct',
@@ -107,6 +116,7 @@ export const config = {
   llm: {
     agent: parseModels(env.AGENT_MODELS ?? defaultAgent),
     vision: parseModels(env.VISION_MODELS ?? defaultVision),
+    roast: parseModels(env.ROAST_MODELS ?? defaultRoast),
   },
   bot: {
     triggers: env.BOT_TRIGGERS.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean),

@@ -10,6 +10,7 @@ const log = logger('main');
 log.info(`Splitbot starting — data in ${config.dataDir}`);
 log.info(`Agent models: ${config.llm.agent.map((m) => m.id).join(' → ') || 'none'}`);
 log.info(`Vision models: ${config.llm.vision.map((m) => m.id).join(' → ') || 'none'}`);
+if (config.bot.denialStyle === 'manglish') log.info(`Roast models: ${config.llm.roast.map((m) => m.id).join(' → ')}`);
 if (!config.llm.agent.length) log.warn('No LLM API key set (OPENROUTER_API_KEY / GROQ_API_KEY) — the bot will fail to process messages');
 
 if (sw.isConnected()) {
