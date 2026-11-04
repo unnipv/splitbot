@@ -91,7 +91,8 @@ async function callModel(ref: ModelRef, messages: ChatMessage[], opts: ChatOptio
     body.reasoning = effort === 'off' ? { enabled: false } : /^\d+$/.test(effort) ? { max_tokens: Number(effort) } : { effort };
   }
   if (effort && ref.provider === 'groq' && ref.model.startsWith('openai/gpt-oss')) body.reasoning_effort = effort;
-  if (effort && ref.provider === 'sarvam') body.reasoning_effort = effort === 'off' ? 'none' : effort;
+  // Sarvam accepts only low|medium|high; "off" maps to the lightest.
+  if (effort && ref.provider === 'sarvam') body.reasoning_effort = effort === 'off' ? 'low' : effort;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` };
   if (ref.provider === 'openrouter') headers['X-Title'] = 'Splitbot';

@@ -96,10 +96,13 @@ const defaultAgent = [
   'groq:openai/gpt-oss-120b@medium',
   'groq:openai/gpt-oss-20b@medium',
 ].filter(Boolean).join(',');
-const defaultRoast = [env.SARVAM_API_KEY && 'sarvam:sarvam-105b@off', defaultAgentFirst()].filter(Boolean).join(',');
-function defaultAgentFirst() {
-  return hasOpenRouter ? 'openrouter:deepseek/deepseek-v4.1-flash@off' : 'groq:openai/gpt-oss-120b@medium';
-}
+// Roasts (Manglish, DENIAL_STYLE=manglish): wit benefits from thinking, unlike expense parsing. DeepSeek with medium
+// reasoning gave the best comebacks; Sarvam's conversational model is a fast Indic-native backup.
+const defaultRoast = [
+  hasOpenRouter && 'openrouter:deepseek/deepseek-v4.1-flash@medium',
+  env.SARVAM_API_KEY && 'sarvam:sarvam-105b-conversations',
+  !hasOpenRouter && 'groq:openai/gpt-oss-120b@medium',
+].filter(Boolean).join(',');
 const defaultVision = [
   hasOpenRouter && 'openrouter:deepseek/deepseek-v4.1-flash@off',
   hasOpenRouter && 'openrouter:qwen/qwen3-vl-235b-a22b-instruct',
