@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "splitbot", "runtimeExecutable": "node", "runtimeArgs": ["src/index.ts"], "port": 3000 }
+  ]
+}

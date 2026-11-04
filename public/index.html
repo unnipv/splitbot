@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Splitbot</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💸</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">💸 Splitbot</div>
+    <nav>
+      <a href="#status">Status</a>
+      <a href="#groups">Groups</a>
+      <a href="#activity">Activity</a>
+      <a href="#playground">Playground</a>
+      <a href="#logs">Logs</a>
+    </nav>
+    <div class="pills"><span id="pill-wa" class="pill">WhatsApp…</span><span id="pill-sw" class="pill">Splitwise…</span></div>
+  </header>
+
+  <main>
+    <!-- Status -->
+    <section id="view-status" class="view">
+      <div class="grid">
+        <div class="card">
+          <h2>WhatsApp</h2>
+          <div id="wa-body"></div>
+        </div>
+        <div class="card">
+          <h2>Splitwise</h2>
+          <div id="sw-body"></div>
+        </div>
+        <div class="card">
+          <h2>Models</h2>
+          <div id="llm-body"></div>
+        </div>
+        <div class="card">
+          <h2>Numbers</h2>
+          <div id="stats-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Groups -->
+    <section id="view-groups" class="view">
+      <div class="card">
+        <h2>WhatsApp groups</h2>
+        <p class="muted">Groups the bot number is in. Link each to a Splitwise group (or let people say <em>“@bot use Goa Trip”</em> in the chat).</p>
+        <div id="groups-body"></div>
+      </div>
+      <div class="card" id="members-card" hidden>
+        <h2 id="members-title">Members</h2>
+        <p class="muted">Who is who. The bot links people automatically when names clearly match; fix anything here.</p>
+        <div id="members-body"></div>
+      </div>
+    </section>
+
+    <!-- Activity -->
+    <section id="view-activity" class="view">
+      <div class="split">
+        <div class="card list-card">
+          <h2>Messages handled</h2>
+          <div id="jobs-body"></div>
+        </div>
+        <div class="card" id="job-detail">
+          <p class="muted">Select a message to see what the bot did.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Playground -->
+    <section id="view-playground" class="view">
+      <div class="card">
+        <h2>Playground</h2>
+        <p class="muted">Talk to the agent as if you were in a group. Dry run shows what would happen without touching Splitwise.</p>
+        <form id="sim-form">
+          <label>Group <select name="group_jid" required></select></label>
+          <label>Sender <select name="sender_contact_id"><option value="">You</option></select></label>
+          <label class="wide">Message <textarea name="text" rows="3" placeholder="dinner 2400, I paid, split with everyone except Rahul"></textarea></label>
+          <label>Bill photo <input type="file" name="image" accept="image/*" /></label>
+          <label class="check"><input type="checkbox" name="dry_run" checked /> Dry run</label>
+          <button type="submit">Send</button>
+        </form>
+        <pre id="sim-out" class="reply" hidden></pre>
+      </div>
+    </section>
+
+    <!-- Logs -->
+    <section id="view-logs" class="view">
+      <div class="card">
+        <h2>Live logs <label class="check small"><input type="checkbox" id="log-debug" /> debug</label></h2>
+        <div id="logs-body" class="logs"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
