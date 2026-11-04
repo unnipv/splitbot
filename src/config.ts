@@ -27,6 +27,8 @@ const Env = z.object({
   TIMEZONE: z.string().default('Asia/Kolkata'),
   OWNER_PHONE: z.string().default(''),
   CONFIRM_MODE: z.enum(['auto', 'always', 'never']).default('auto'),
+  // Prefix on expense titles the bot adds to Splitwise, so they stand out from ones added by hand. Empty = no tag.
+  EXPENSE_TAG: z.string().default('[bot]'),
   // How the bot turns down off-topic messages: 'manglish' (roasts + sticker) or 'plain'.
   DENIAL_STYLE: z.enum(['plain', 'manglish']).default('plain'),
 
@@ -131,6 +133,7 @@ export const config = {
     ownerPhone: env.OWNER_PHONE.replace(/\D/g, ''),
     /** auto: draft only when the model is unsure · always: every expense is a draft · never: always push */
     confirmMode: env.CONFIRM_MODE,
+    expenseTag: env.EXPENSE_TAG.trim(),
     denialStyle: env.DENIAL_STYLE,
   },
   limits: {

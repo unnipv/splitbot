@@ -177,16 +177,29 @@ export async function listExpenses(groupId: number, limit = 15): Promise<SwExpen
 
 // ── Writes ──────────────────────────────────────────────────────
 
-async function expensePayload(spec: ExpenseSpec, groupId: number) {
+/** "[bot] Dinner" — tagged once, even if the model echoes a title that already carries the tag. */
+export function taggedDescription(description: string) {
+  const tag = config.bot.expenseTag;
+  const plain = tag && description.startsWith(tag) ? description.slice(tag.length).trim() : description.trim();
+  return (tag ? `${tag} ${plain}` : plain).slice(0, 200);
+}
+
+/** Who asked for it, plus any bill line items. Splitwise shows this as the expense's notes. */
+function expenseDetails(spec: ExpenseSpec, addedBy?: string) {
+  const credit = `Added by Splitbot via WhatsApp${addedBy ? ` · requested by ${addedBy}` : ''}`;
+  return spec.notes ? `${spec.notes}\n\n— ${credit}` : credit;
+}
+
+async function expensePayload(spec: ExpenseSpec, groupId: number, addedBy?: string) {
   const shares = computeShares(spec);
   const fields: Record<string, string> = {
     cost: spec.cost.toFixed(currencyDecimals(spec.currency)),
-    description: spec.description.slice(0, 200),
+    description: taggedDescription(spec.description),
     currency_code: spec.currency,
     group_id: String(groupId),
   };
   if (spec.date) fields.date = new Date(spec.date).toISOString();
-  if (spec.notes) fields.details = spec.notes;
+  fields.details = expenseDetails(spec, addedBy);
   const categoryId = matchCategory(spec.category, await categories().catch(() => []));
   if (categoryId) fields.category_id = String(categoryId);
   shares.forEach((s, i) => {
@@ -206,8 +219,13 @@ function withReceipt(fields: Record<string, string>, receipt?: { data: Buffer; m
   return form;
 }
 
-export async function createExpense(spec: ExpenseSpec, groupId: number, receipt?: { data: Buffer; mime: string }) {
-  const { fields, shares } = await expensePayload(spec, groupId);
+export async function createExpense(
+  spec: ExpenseSpec,
+  groupId: number,
+  o: { receipt?: { data: Buffer; mime: string }; addedBy?: string } = {},
+) {
+  const { receipt } = o;
+  const { fields, shares } = await expensePayload(spec, groupId, o.addedBy);
   let res: { expenses: SwExpense[] };
   try {
     res = await call('POST', 'create_expense', withReceipt(fields, receipt));
@@ -220,8 +238,8 @@ export async function createExpense(spec: ExpenseSpec, groupId: number, receipt?
   return { expense: res.expenses[0], shares };
 }
 
-export async function updateExpense(id: number, spec: ExpenseSpec, groupId: number) {
-  const { fields, shares } = await expensePayload(spec, groupId);
+export async function updateExpense(id: number, spec: ExpenseSpec, groupId: number, addedBy?: string) {
+  const { fields, shares } = await expensePayload(spec, groupId, addedBy);
   const res = await call<{ expenses: SwExpense[] }>('POST', `update_expense/${id}`, fields);
   groupCache.delete(groupId);
   return { expense: res.expenses[0], shares };

@@ -304,13 +304,14 @@ function parseSpec(raw: any, ctx: GroupCtx): ExpenseSpec {
 async function pushExpense(
   ctx: GroupCtx,
   spec: ExpenseSpec,
-  o: { groupJid: string; jobId: number; dryRun: boolean; image?: Image; assumptions?: string[] },
+  o: { groupJid: string; jobId: number; dryRun: boolean; image?: Image; assumptions?: string[]; requestJobId?: number | null },
 ) {
   if (o.dryRun) {
     const fakeId = -(Date.now() % 1e6);
     return { id: fakeId, text: receipt(ctx, spec, 'dry-run', `#${fakeId}`, o.assumptions) };
   }
-  const { expense } = await sw.createExpense(spec, ctx.group!.id, o.image);
+  const addedBy = store.getJob(o.requestJobId ?? o.jobId)?.sender_name ?? undefined;
+  const { expense } = await sw.createExpense(spec, ctx.group!.id, { receipt: o.image, addedBy });
   store.saveExpense({
     splitwise_expense_id: expense.id,
     job_id: o.jobId,
@@ -336,6 +337,7 @@ async function confirmOne(ctx: GroupCtx, draft: store.Draft, jobId: number, corr
     jobId,
     dryRun: !!draft.dry_run,
     image: draftImage(draft.id),
+    requestJobId: draft.job_id,
   });
   store.setDraftStatus(draft.id, 'confirmed', pushed.id);
   fs.rmSync(path.join(RECEIPT_DIR, `draft-${draft.id}.jpg`), { force: true });
@@ -576,7 +578,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
         const spec = parseSpec(args.spec, ctx);
         const id = Number(args.expense_id);
         if (!dryRun) {
-          await sw.updateExpense(id, spec, group!.id);
+          await sw.updateExpense(id, spec, group!.id, store.getJob(input.jobId)?.sender_name ?? undefined);
           store.saveExpense({
             splitwise_expense_id: id,
             job_id: input.jobId,
