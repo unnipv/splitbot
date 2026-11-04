@@ -68,6 +68,8 @@ export interface ModelRef {
   id: string;
   /** Reasoning effort (low | medium | high) for models that reason. */
   effort?: string;
+  /** Optional style tag ("#en"), e.g. which roast prompt this model gets. */
+  style?: string;
 }
 
 /** Parse "openrouter:deepseek/deepseek-v4.1-flash, groq:openai/gpt-oss-120b@high"; entries without a key are skipped. */
@@ -80,8 +82,9 @@ export function parseModels(list: string): ModelRef[] {
       const i = id.indexOf(':');
       const provider = id.slice(0, i) as ProviderName;
       if (!(provider in PROVIDERS)) throw new Error(`Unknown provider in "${id}" (use ${Object.keys(PROVIDERS).join(', ')})`);
-      const [model, effort] = id.slice(i + 1).split('@');
-      return { provider, model, id, effort: effort || undefined };
+      const [rest, style] = id.slice(i + 1).split('#');
+      const [model, effort] = rest.split('@');
+      return { provider, model, id, effort: effort || undefined, style: style || undefined };
     })
     .filter((m) => PROVIDERS[m.provider].apiKey);
 }
@@ -96,11 +99,11 @@ const defaultAgent = [
   'groq:openai/gpt-oss-120b@medium',
   'groq:openai/gpt-oss-20b@medium',
 ].filter(Boolean).join(',');
-// Roasts (Manglish, DENIAL_STYLE=manglish): wit benefits from thinking, unlike expense parsing. DeepSeek with medium
-// reasoning gave the best comebacks; Sarvam's conversational model is a fast Indic-native backup.
+// Roasts (DENIAL_STYLE=manglish): wit benefits from thinking, unlike expense parsing. DeepSeek with medium reasoning
+// wrote the best Manglish; Sarvam's conversational model is a fast backup but only good in English ("#en" prompt).
 const defaultRoast = [
   hasOpenRouter && 'openrouter:deepseek/deepseek-v4.1-flash@medium',
-  env.SARVAM_API_KEY && 'sarvam:sarvam-105b-conversations',
+  env.SARVAM_API_KEY && 'sarvam:sarvam-105b-conversations#en',
   !hasOpenRouter && 'groq:openai/gpt-oss-120b@medium',
 ].filter(Boolean).join(',');
 const defaultVision = [
