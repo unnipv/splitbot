@@ -54,6 +54,7 @@ export function currencyDecimals(currency: string): number {
 function apportion(total: number, weights: number[]): number[] {
   const sum = weights.reduce((a, b) => a + b, 0);
   if (sum <= 0) throw new SplitError('Split weights must add up to more than zero');
+  if (total === 0) return weights.map(() => 0);
   const exact = weights.map((w) => (total * w) / sum);
   const out = exact.map(Math.floor);
   let left = total - out.reduce((a, b) => a + b, 0);
@@ -124,10 +125,17 @@ export function computeShares(spec: ExpenseSpec): UserShare[] {
       break;
     }
     case 'adjustment': {
-      const adj = values.map((v) => toMinor(v ?? 0, scale));
-      const rest = total - adj.reduce((a, b) => a + b, 0);
-      if (rest < 0) throw new SplitError('Adjustments are larger than the cost');
-      const base = apportion(rest, parts.map(() => 1));
+      // Spread the (tax-scaled) adjustment total by weight, so rounding can never push it past the cost.
+      const raw = parts.map((p) => Math.max(0, p.value ?? 0));
+      const rawSum = raw.reduce((a, b) => a + b, 0);
+      const adjTotal = toMinor(rawSum * taxFactor, scale);
+      if (adjTotal > total + parts.length) {
+        throw new SplitError(
+          `The per-person extras add up to ${fmt(adjTotal, decimals)}, more than the cost of ${fmt(total, decimals)}`,
+        );
+      }
+      const adj = rawSum > 0 ? apportion(Math.min(adjTotal, total), raw) : raw.map(() => 0);
+      const base = apportion(total - adj.reduce((a, b) => a + b, 0), parts.map(() => 1));
       owed = base.map((b, i) => b + adj[i]);
       break;
     }
@@ -159,21 +167,47 @@ function fmt(minor: number, decimals: number) {
 export function expandItems(spec: ExpenseSpec): ExpenseSpec {
   const items = spec.split.items;
   if (!items?.length) return spec;
-  const extras = new Map<number, number>();
+  const decimals = currencyDecimals(spec.currency);
+  const scale = 10 ** decimals;
   for (const it of items) {
-    if (!(it.amount > 0) || !it.user_ids?.length) throw new SplitError('Each item needs an amount and at least one person');
-    for (const id of it.user_ids) extras.set(id, (extras.get(id) ?? 0) + it.amount / it.user_ids.length);
+    if (!(it.amount > 0) || !it.user_ids?.length) {
+      throw new SplitError(`Item "${it.name ?? '?'}" needs an amount and at least one person who had it`);
+    }
+  }
+  const itemsTotal = items.reduce((s, it) => s + toMinor(it.amount, scale), 0);
+  const cost = toMinor(spec.cost, scale);
+  let subtotal = spec.split.subtotal && spec.split.subtotal > 0 ? toMinor(spec.split.subtotal, scale) : undefined;
+  // Many bills (e.g. Thai VAT receipts) print tax-inclusive prices next to a pre-tax "net total". Items that only
+  // fit the full cost were priced with tax already, so there's nothing left to scale.
+  if (subtotal !== undefined && itemsTotal > subtotal && itemsTotal <= cost + items.length) subtotal = undefined;
+  const limit = subtotal ?? cost;
+  if (itemsTotal > limit + items.length) {
+    const names = items.map((it) => `${it.name ?? 'item'} ${fmt(toMinor(it.amount, scale), decimals)}`).join(', ');
+    throw new SplitError(
+      `The items add up to ${fmt(itemsTotal, decimals)} (${names}), but the bill ${subtotal !== undefined ? 'subtotal' : 'total'} is ` +
+        `${fmt(limit, decimals)} — ${fmt(itemsTotal - limit, decimals)} too much. An item price or quantity is probably misread or counted twice.`,
+    );
+  }
+  // Each item is divided among its people in minor units, so the per-person extras add up exactly.
+  // Items with the same people are pooled first, so leftover minor units don't land on the same person twice.
+  const pools = new Map<string, { ids: number[]; amount: number }>();
+  for (const it of items) {
+    const ids = [...new Set(it.user_ids)].sort((x, y) => x - y);
+    const pool = pools.get(ids.join()) ?? pools.set(ids.join(), { ids, amount: 0 }).get(ids.join())!;
+    pool.amount += toMinor(it.amount, scale);
+  }
+  const extras = new Map<number, number>();
+  for (const { ids, amount } of pools.values()) {
+    apportion(amount, ids.map(() => 1)).forEach((v, i) => extras.set(ids[i], (extras.get(ids[i]) ?? 0) + v));
   }
   const ids = new Set(spec.split.participants.map((p) => p.user_id));
   for (const id of extras.keys()) ids.add(id);
-  const itemsTotal = items.reduce((s, it) => s + it.amount, 0);
-  if (itemsTotal > (spec.split.subtotal ?? spec.cost) + 0.01) throw new SplitError('Items add up to more than the bill');
   return {
     ...spec,
     split: {
       type: 'adjustment',
-      subtotal: spec.split.subtotal,
-      participants: [...ids].map((user_id) => ({ user_id, value: extras.has(user_id) ? Math.round(extras.get(user_id)! * 100) / 100 : undefined })),
+      subtotal: subtotal === undefined ? undefined : subtotal / scale,
+      participants: [...ids].map((user_id) => ({ user_id, value: extras.has(user_id) ? extras.get(user_id)! / scale : undefined })),
     },
   };
 }

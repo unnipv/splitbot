@@ -1,12 +1,15 @@
 import fs from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
 import makeWASocket, {
   Browsers,
+  decryptPollVote,
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
   getContentType,
   isJidGroup,
   jidDecode,
+  jidNormalizedUser,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
   useMultiFileAuthState,
@@ -17,7 +20,7 @@ import makeWASocket, {
 } from 'baileys';
 import pino from 'pino';
 import QRCode from 'qrcode';
-import { confirmDrafts, handleMessage, type AgentResult } from './agent.ts';
+import { confirmDrafts, handleMessage, type AgentResult, type Poll } from './agent.ts';
 import { config } from './config.ts';
 import * as store from './db.ts';
 import { denialFor, type Denial } from './denial.ts';
@@ -262,6 +265,7 @@ async function onMessage(s: WASocket, msg: WAMessage) {
 
   const content = normalizeMessageContent(msg.message);
   if (!content || content.protocolMessage || content.reactionMessage) return;
+  if (content.pollUpdateMessage) return onPollVote(s, msg, content.pollUpdateMessage);
 
   if (!isJidGroup(jid)) return onDirectMessage(s, msg, content);
 
@@ -395,7 +399,10 @@ async function handleTrigger(
           text: textOf(quotedContent),
           fromBot: m.repliedToBot,
           expenseIds: botMsg?.expense_ids ?? [],
-          draftIds: m.quotedId ? store.draftsForBotMessage(m.quotedId).map((d) => d.id) : [],
+          draftIds: m.quotedId
+            ? [...store.draftsForBotMessage(m.quotedId).map((d) => d.id), ...(store.getPoll(m.quotedId)?.draft_ids ?? [])]
+            : [],
+          jobId: botMsg?.job_id,
         }
       : undefined;
 
@@ -447,11 +454,118 @@ async function sendDenial(s: WASocket, jid: string, quoted: WAMessage, denial: D
 }
 
 async function sendResult(s: WASocket, jid: string, quoted: WAMessage, jobId: number, result: AgentResult) {
-  const sent = await s.sendMessage(jid, { text: result.reply }, { quoted });
+  const sent = result.reply ? await s.sendMessage(jid, { text: result.reply }, { quoted }) : undefined;
   if (sent?.key.id) {
     store.saveBotMessage(sent.key.id, jid, jobId, result.expenseIds);
     store.attachDraftsToMessage(result.draftIds, sent.key.id);
   }
+  if (result.poll) await sendPoll(s, jid, jobId, result.poll, result.draftIds);
+}
+
+async function sendPoll(s: WASocket, jid: string, jobId: number, poll: Poll, draftIds: number[]) {
+  // We pick the secret ourselves and keep it: Baileys doesn't decrypt votes for us, and we need it after restarts.
+  const secret = randomBytes(32);
+  const sent = await s
+    .sendMessage(jid, { poll: { name: poll.question, values: poll.options, selectableCount: 1, messageSecret: secret } })
+    .catch((err) => log.warn('Sending poll failed', errMsg(err)));
+  if (!sent?.key.id) {
+    // Fall back to a plain question so it's still asked.
+    await s.sendMessage(jid, { text: `❓ ${poll.question}\n${poll.options.map((o) => `• ${o}`).join('\n')}` }).catch(() => {});
+    return;
+  }
+  store.savePoll({ wa_msg_id: sent.key.id, wa_group_jid: jid, job_id: jobId, question: poll.question, options: poll.options, draft_ids: draftIds, secret });
+  // A reply to the poll counts as a reply to the bot too (its drafts stay attached to the receipt message for 👍).
+  store.saveBotMessage(sent.key.id, jid, jobId, []);
+}
+
+/** A vote on one of our polls is handled like a reply with the chosen answer. The first vote decides. */
+async function onPollVote(s: WASocket, msg: WAMessage, update: proto.Message.IPollUpdateMessage) {
+  const pollKey = update.pollCreationMessageKey;
+  const jid = msg.key.remoteJid;
+  if (!pollKey?.id || !jid || !update.vote?.encPayload || !update.vote.encIv) return;
+  const poll = store.getPoll(pollKey.id);
+  if (!poll) return;
+
+  const option = decryptVote(s, msg, poll, update.vote);
+  if (option === undefined) return log.warn(`Couldn't decrypt a vote on poll ${pollKey.id}`);
+  if (option === null) return; // vote withdrawn
+
+  const voter = store.resolveContact({ ...splitIds([msg.key.participant, (msg.key as any).participantAlt]), pushName: msg.pushName ?? null });
+  const drafts = poll.draft_ids.map((id) => store.getDraft(id)).filter((d) => d?.status === 'pending');
+  if ((poll.draft_ids.length && !drafts.length) || !store.markPollAnswered(pollKey.id)) {
+    return log.info(`Ignoring ${voter.push_name ?? '?'}'s vote "${option}": poll already answered`);
+  }
+
+  const text = `${option} (answering your poll "${poll.question}")`;
+  const jobId = store.createJob({
+    msgId: `poll:${msg.key.id}`,
+    groupJid: jid,
+    groupName: groupCache.get(jid)?.meta.subject ?? null,
+    senderContactId: voter.id,
+    senderName: voter.push_name,
+    text,
+    hasImage: false,
+    dryRun: false,
+  });
+  if (jobId === null) return;
+  bus.emit('job', { id: jobId });
+  log.info(`Job #${jobId}: ${voter.push_name ?? '?'} voted "${option}" on "${poll.question}"`);
+  const pollMsg: WAMessage = { key: pollKey, message: { conversation: poll.question } };
+
+  const run = async () => {
+    try {
+      const result = await handleMessage({
+        jobId,
+        groupJid: jid,
+        groupName: groupCache.get(jid)?.meta.subject ?? null,
+        sender: voter,
+        text,
+        images: [],
+        quoted: {
+          text: `${poll.question}\nOptions: ${poll.options.join(' / ')}`,
+          fromBot: true,
+          expenseIds: [],
+          draftIds: drafts.map((d) => d!.id),
+          jobId: poll.job_id ?? undefined,
+        },
+        recentChat: recentChat.get(jid) ?? [],
+        participants: participantContacts(groupCache.get(jid)?.meta ?? null),
+      });
+      await sendResult(s, jid, pollMsg, jobId, result);
+      store.finishJob(jobId, { status: 'done', reply: result.reply, trace: result.trace });
+    } catch (err) {
+      log.error(`Job #${jobId} failed`, err);
+      store.finishJob(jobId, { status: 'error', error: errMsg(err) });
+      await s.sendMessage(jid, { text: `⚠️ Couldn't process that vote: ${errMsg(err).slice(0, 200)}` }).catch(() => {});
+    }
+    bus.emit('job', { id: jobId });
+  };
+  const next = (queues.get(jid) ?? Promise.resolve()).then(run);
+  queues.set(jid, next.catch(() => {}));
+  await next;
+}
+
+/** The chosen option, null for a withdrawn vote, undefined if no jid pairing decrypts it. */
+function decryptVote(s: WASocket, msg: WAMessage, poll: store.PollRow, vote: proto.Message.IPollEncValue) {
+  // Votes are keyed to the creator's and voter's jids, which may be phone-number or LID based.
+  const creators = [s.user?.id, s.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j!));
+  const voters = [msg.key.participant, (msg.key as any).participantAlt].filter(Boolean).map((j) => jidNormalizedUser(j));
+  for (const pollCreatorJid of creators) {
+    for (const voterJid of voters) {
+      try {
+        const res = decryptPollVote(vote as { encPayload: Uint8Array; encIv: Uint8Array }, {
+          pollCreatorJid,
+          pollMsgId: poll.wa_msg_id,
+          pollEncKey: poll.secret,
+          voterJid,
+        });
+        const picked = (res.selectedOptions ?? []).map((h) => Buffer.from(h).toString('hex'));
+        if (!picked.length) return null;
+        return poll.options.find((o) => picked.includes(createHash('sha256').update(o).digest('hex'))) ?? null;
+      } catch {}
+    }
+  }
+  return undefined;
 }
 
 /** 👍 / ✅ on a bot draft message confirms it. */

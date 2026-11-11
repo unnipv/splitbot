@@ -189,6 +189,7 @@ export function startWeb() {
             fromBot: true,
             expenseIds: store.recentExpenses(group_jid, 50).filter((e) => e.job_id === prevJob.id).map((e) => e.splitwise_expense_id),
             draftIds: store.draftsForJob(prevJob.id).map((d) => d.id),
+            jobId: prevJob.id,
           }
         : undefined;
       const result = await handleMessage({
@@ -207,6 +208,8 @@ export function startWeb() {
         const denial = await denialFor({ reason: 'off-topic (model)', kind: 'offtopic', strike: 1 }, { name: sender.push_name ?? 'aliya', text: String(text ?? '') });
         result.reply = denial?.text ?? (denial?.sticker ? '[last warning sticker]' : '[ignored]');
       }
+      // No WhatsApp here: show the poll as text, and reply to this job with one of the options to answer it.
+      if (result.poll) result.reply = [result.reply, `📊 Poll: ${result.poll.question}\n${result.poll.options.map((o) => `○ ${o}`).join('\n')}`].filter(Boolean).join('\n\n');
       store.finishJob(jobId, { status: 'done', reply: result.reply, trace: result.trace });
       res.json({ jobId, ...result });
     } catch (err) {

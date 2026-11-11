@@ -22,7 +22,8 @@ export interface AgentInput {
   sender: store.Contact;
   text: string;
   images: Image[];
-  quoted?: { text: string; fromBot: boolean; expenseIds: number[]; draftIds: number[] };
+  /** jobId: the job the quoted bot message answered, so a follow-up sees that conversation (and its bill) again. */
+  quoted?: { text: string; fromBot: boolean; expenseIds: number[]; draftIds: number[]; jobId?: number };
   recentChat: { name: string; text: string; ts: number }[];
   /** WhatsApp group participants we know about (for linking people to Splitwise). */
   participants: store.Contact[];
@@ -36,7 +37,22 @@ export interface AgentResult {
   trace: unknown[];
   /** The model judged the message off-topic; the caller sends a denial (roast/sticker) instead of a reply. */
   offTopic?: boolean;
+  /** A question with tappable answers, sent as a WhatsApp poll after the reply. */
+  poll?: Poll;
 }
+
+export interface Poll {
+  question: string;
+  options: string[];
+}
+
+const pollOptions = {
+  type: 'array',
+  items: { type: 'string' },
+  description:
+    'When the answer is a pick between a few concrete choices: 2–4 short answers (max ~40 chars each) shown as a WhatsApp poll, ' +
+    'e.g. ["Yes, Devu = Dev Nair", "No, it\'s Devika"]. Omit for open questions.',
+};
 
 // ── Tool schemas ────────────────────────────────────────────────
 
@@ -124,6 +140,7 @@ const TOOLS: ToolDef[] = [
             type: 'string',
             description: 'With needs_confirmation: the one short, specific question for the group, e.g. "Is Devu = Dev Nair?"',
           },
+          options: pollOptions,
         },
       },
     },
@@ -199,6 +216,23 @@ const TOOLS: ToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'ask_user',
+      description:
+        'Ask the group something when you cannot record the expense yet (missing info, or a split that does not work out). ' +
+        'Say briefly what the problem is with the actual numbers, propose the most likely fix, and ask them to confirm or correct.',
+      parameters: {
+        type: 'object',
+        required: ['message'],
+        properties: {
+          message: { type: 'string', description: 'Short WhatsApp message: the problem, your proposed fix, the question.' },
+          options: pollOptions,
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'not_about_expenses',
       description: 'The message is not about expenses (chat, jokes, banter, reactions). Call this alone; do not reply yourself.',
       parameters: { type: 'object', properties: {} },
@@ -226,14 +260,16 @@ Understanding expenses:
   · "Rahul paid 1000 and I paid 500" → two payers with amounts · "everyone paid equally" / "paid and owed by everyone" → EVERY member in payers (no amounts) and in the split; the sender is not the payer then
 - Several expenses in one message → one create_expense call each. Each expense is recorded exactly ONCE: after create_expense returns ok, never call it again for the same expense.
 - Bills (OCR data is given to you): cost = "total" (what was actually paid). Use the bill's currency, otherwise the default currency. notes = the line items, compact.
-- Items only some people had ("Dev didn't have beer", "the sea bass was mine", "Nikhil and I shared the wine"): type "equal" with ALL people at the meal as participants, plus split.items listing each such item with its PRE-TAX price and exactly who had it. On a bill also set split.subtotal so the code spreads tax/service. Example: bill subtotal 1980, 3 beers 360, Dev didn't drink → participants: everyone; items: [{name:"Beer", amount:360, user_ids:[everyone except Dev]}]; subtotal: 1980.
+- Items only some people had ("Dev didn't have beer", "the sea bass was mine", "Nikhil and I shared the wine"): type "equal" with ALL people at the meal as participants, plus split.items listing each such item with its price exactly as printed on the bill and exactly who had it. Items shared by everyone can be listed with everyone or left out (the remainder is split equally). If tax/service is ADDED on top of the item prices, set split.subtotal = the sum before those charges so the code spreads them; if the printed prices already include tax (e.g. "VAT included", item prices add up to the total), omit subtotal. Example: bill subtotal 1980 + 10% service = 2178, 3 beers 360, Dev didn't drink → participants: everyone; items: [{name:"Beer", amount:360, user_ids:[everyone except Dev]}]; subtotal: 1980.
 - Never compute amounts in your head: the code computes every share from the spec.
 - description: a short, specific title ("Dinner at Thalassa", "Cab to airport"), never the raw message.
 
 Being careful — three outcomes:
 1. Clear (stated explicitly, or only the standard defaults "sender paid, everyone split" apply) → create_expense with needs_confirmation=false. It goes straight to Splitwise.
 2. You can make a reasonable best guess but made a real judgment call → create_expense with needs_confirmation=true and put the one specific question in its "question" field, so people can just say "yes" or correct it. Judgment calls include: a name that could match more than one member or matches none well; unclear who was included ("we", "the boys", "those who came"); unclear payer when the sender isn't linked; a bill with several possible totals, a cut-off/blurry total, or a currency you guessed; a text amount that disagrees with the bill; anything you inferred that wasn't said.
-3. Essential info is missing and there's no sensible guess (no amount, no idea who paid) → don't create anything; ask one short, specific question.
+3. Essential info is missing and there's no sensible guess (no amount, no idea who paid) → don't create anything; call ask_user with one short, specific question.
+- If create_expense returns an error, fix the spec and retry once. If you can't fix it, call ask_user: say what doesn't add up (with the numbers), propose the most likely fix, and ask. Never resend the same spec.
+- Use "options" (a WhatsApp poll) when the answer is a pick between a few concrete choices; otherwise people just reply.
 - Always fill "assumptions" with each default/inference you applied that the message didn't state (e.g. "you paid", "split among all 4", "currency THB from bill", "Devu = Dev Nair"). Don't list things the message said explicitly, and don't mention the default currency.
 
 Drafts and corrections:
@@ -341,10 +377,35 @@ async function confirmOne(ctx: GroupCtx, draft: store.Draft, jobId: number, corr
   });
   store.setDraftStatus(draft.id, 'confirmed', pushed.id);
   fs.rmSync(path.join(RECEIPT_DIR, `draft-${draft.id}.jpg`), { force: true });
+  // The group already saw the full split on the draft; an unchanged confirmation is just one line.
+  if (!corrected) {
+    const what = `*${spec.description}* · ${money(spec.cost, spec.currency)}`;
+    pushed.text = draft.dry_run ? `🧪 Dry run · would add ${what} · nothing sent` : `✅ Added to Splitwise · ${what} · #${pushed.id}`;
+  }
   return pushed;
 }
 
 // ── Entry points ────────────────────────────────────────────────
+
+/** Poll answers: 2–12 distinct short strings (WhatsApp's limits), or none. */
+function cleanOptions(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const opts = [...new Set(raw.map((o) => String(o).trim().slice(0, 100)).filter(Boolean))].slice(0, 12);
+  return opts.length >= 2 ? opts : [];
+}
+
+/** What the bot was answering in an earlier job: that job's own input (message, OCR'd bill, its earlier context) and reply. */
+function earlierContext(jobId: number): string {
+  const job = store.getJob(jobId);
+  if (!job) return '';
+  let user = '';
+  try {
+    const ctx = (JSON.parse(job.trace ?? '[]') as { step: string; user?: string }[]).find((t) => t.step === 'context');
+    user = ctx?.user ?? '';
+  } catch {}
+  if (!user) user = `${job.sender_name ?? 'Someone'}: ${job.text ?? ''}`;
+  return `${user.slice(-6000)}\nYou replied: ${(job.reply ?? '').slice(0, 1500)}`;
+}
 
 const FINAL_TOOLS = new Set(['create_expense', 'confirm_draft', 'discard_draft', 'update_expense', 'delete_expense', 'link_group']);
 
@@ -386,7 +447,9 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
   const expenseIds: number[] = [];
   const draftIds: number[] = [];
   const created = new Map<string, unknown>();
-  const questions: string[] = [];
+  const questions: { text: string; options: string[] }[] = [];
+  /** ask_user messages: explanations and questions that stand on their own (no receipt). */
+  const asked: string[] = [];
 
   // Stage 1: images → structured bill data via the vision/OCR model.
   const bills = [];
@@ -457,6 +520,8 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
         : `[Replying to a message: "${q.text.slice(0, 600)}"]`,
     );
   }
+  const earlier = input.quoted?.fromBot && input.quoted.jobId ? earlierContext(input.quoted.jobId) : '';
+  if (earlier) userParts.unshift(`[Earlier conversation this reply continues (bill data still applies):\n${earlier}]`);
   bills.forEach((b, i) => userParts.push(`[Attached image ${i + 1}, read by OCR: ${JSON.stringify(b)}]`));
   userParts.push(`${s.push_name ?? 'Sender'}: ${input.text || '(no text)'}`);
 
@@ -471,9 +536,22 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
   let finalText = '';
   // Once a model fails mid-message, later steps start from the one that answered instead of retrying it.
   let chain = agentModels();
+  let poll: Poll | undefined;
+  const failures: string[] = [];
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const res = await chat(chain, messages, { tools });
+    // After two failed attempts, stop retrying: the model has to explain the problem and ask the group.
+    const stuck = failures.length >= 2;
+    if (stuck) {
+      messages.push({
+        role: 'user',
+        content:
+          `[System: the expense could not be recorded: ${failures.at(-1)}. Do not call create_expense again. Call ask_user: ` +
+          'say in plain words what does not add up (with the numbers), propose the most likely fix, and ask the group to confirm or correct it.]',
+      });
+    }
+    const stepTools = stuck ? tools.filter((t) => t.function.name === 'ask_user') : tools;
+    const res = await chat(chain, messages, { tools: stepTools });
     chain = chain.slice(Math.max(0, chain.findIndex((m) => m.id === res.model)));
     trace.push({ step: 'llm', model: res.model, content: res.content, tool_calls: res.tool_calls, usage: res.usage });
     if (!res.tool_calls.length) {
@@ -497,6 +575,8 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
       }
       trace.push({ step: 'tool', name: call.function.name, args: call.function.arguments, result });
       log.info(`tool ${call.function.name}`, result);
+      const error = (result as { error?: string })?.error;
+      if (error && ['create_expense', 'confirm_draft', 'update_expense'].includes(call.function.name)) failures.push(error);
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
     }
     // Recording actions produce their own receipts; when they all succeeded there's nothing left for the model
@@ -509,17 +589,26 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
       finalText = res.content ?? '';
       break;
     }
+    if (called.includes('ask_user')) break;
+    if (stuck) break;
   }
-  finalText = [finalText.trim(), ...questions.map((q) => `❓ ${q}`)].filter(Boolean).join('\n');
+  // The model never managed to explain: say what went wrong ourselves, so people can correct it by replying.
+  if (failures.length && !receipts.length && !asked.length && !finalText.trim()) {
+    asked.push(`⚠️ I couldn't work out this split: ${failures.at(-1)}\nReply to this message with the fix (e.g. which items, who had them, or the right total) and I'll redo it.`);
+  }
+  // The first question that comes with choices goes out as a poll instead of a text line.
+  const pollAt = questions.findIndex((q) => q.options.length >= 2);
+  if (pollAt >= 0) poll = { question: questions[pollAt].text, options: questions[pollAt].options };
+  finalText = [finalText.trim(), ...questions.filter((_, i) => i !== pollAt).map((q) => `❓ ${q.text}`)].filter(Boolean).join('\n');
 
   const FILLER = /^[\s\p{Extended_Pictographic}️.!]*(added|done|ok(ay)?|logged|got it)?[\s\p{Extended_Pictographic}️.!]*$/iu;
   if (receipts.length && FILLER.test(finalText)) finalText = '';
   // Receipts speak for themselves; of the model's own words keep only questions ("I'll record this…" is noise).
   if (receipts.length) finalText = finalText.split('\n').filter((l) => l.includes('?')).join('\n');
-  const parts = [finalText.trim(), ...receipts];
+  const parts = [...asked, finalText.trim(), ...receipts];
   if (draftIds.length) parts.push(DRAFT_FOOTER);
-  const reply = parts.filter(Boolean).join('\n\n') || '🤔 Not sure what to do with that — try e.g. "dinner 2400, I paid".';
-  return { reply, expenseIds, draftIds, trace };
+  const reply = parts.filter(Boolean).join('\n\n') || (poll ? '' : '🤔 Not sure what to do with that — try e.g. "dinner 2400, I paid".');
+  return { reply, expenseIds, draftIds, trace, poll };
 
   // ── Tool implementations (closures over this message's context) ──
 
@@ -536,7 +625,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
         const mode = config.bot.confirmMode;
         const asDraft = mode === 'always' || (mode === 'auto' && args.needs_confirmation === true);
         const image = input.images.length === 1 ? input.images[0] : undefined;
-        if (typeof args.question === 'string' && args.question.trim()) questions.push(args.question.trim());
+        if (typeof args.question === 'string' && args.question.trim()) questions.push({ text: args.question.trim(), options: cleanOptions(args.options) });
         if (asDraft) {
           const id = store.createDraft({ groupJid: input.groupJid, jobId: input.jobId, spec, assumptions, dryRun });
           if (image) {
@@ -556,11 +645,41 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
         created.set(key, res);
         return res;
       }
+      case 'ask_user': {
+        const message = String(args.message ?? '').trim();
+        if (!message) return { error: 'message is required' };
+        const options = cleanOptions(args.options);
+        if (options.length >= 2 && !poll) {
+          // The explanation goes in the text; the poll title is just the question (from its first "?" sentence on).
+          const sentences = message.match(/[^.?!\n]+[.?!]*\s*|\n/g) ?? [message];
+          const lastQ = sentences.findLastIndex((x) => x.includes('?'));
+          let from = lastQ;
+          while (from > 0 && sentences[from - 1].includes('?')) from--;
+          const q = lastQ >= 0 ? sentences.slice(from, lastQ + 1).join('').trim() : 'Which one?';
+          poll = { question: q.slice(0, 255), options };
+          const rest = (lastQ >= 0 ? [...sentences.slice(0, from), ...sentences.slice(lastQ + 1)] : sentences).join('').trim();
+          if (rest) asked.push(rest);
+        } else {
+          asked.push(message);
+        }
+        return { ok: true, status: 'Sent to the group. Stop here and wait for their answer.' };
+      }
       case 'confirm_draft': {
         const draft = store.getDraft(Number(args.draft_id));
         if (!draft || draft.wa_group_jid !== input.groupJid) return { error: 'No such draft in this group' };
         if (draft.status !== 'pending') return { error: `Draft already ${draft.status}` };
         const corrected = args.spec ? parseSpec(args.spec, ctx) : undefined;
+        if (corrected && config.bot.confirmMode === 'always') {
+          // Every push needs an explicit yes: a corrected draft is shown again as a new draft instead of being added.
+          store.setDraftStatus(draft.id, 'discarded');
+          const assumptions: string[] = Array.isArray(args.assumptions) ? args.assumptions.map(String).filter(Boolean) : [];
+          const id = store.createDraft({ groupJid: input.groupJid, jobId: draft.job_id ?? input.jobId, spec: corrected, assumptions, dryRun });
+          const img = path.join(RECEIPT_DIR, `draft-${draft.id}.jpg`);
+          if (fs.existsSync(img)) fs.renameSync(img, path.join(RECEIPT_DIR, `draft-${id}.jpg`));
+          draftIds.push(id);
+          receipts.push(receipt(ctx, corrected, 'draft', `D${id}`, assumptions));
+          return { ok: true, draft_id: id, status: 'Corrected and saved as a new draft; waiting for the group to confirm.' };
+        }
         const pushed = await confirmOne(ctx, draft, input.jobId, corrected);
         expenseIds.push(pushed.id);
         receipts.push(pushed.text);

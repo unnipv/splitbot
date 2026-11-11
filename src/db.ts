@@ -92,6 +92,19 @@ CREATE TABLE IF NOT EXISTS bot_messages (
   expense_ids TEXT,
   created_at INTEGER NOT NULL
 );
+
+-- Polls the bot sent, with the secret needed to decrypt votes on them.
+CREATE TABLE IF NOT EXISTS polls (
+  wa_msg_id TEXT PRIMARY KEY,
+  wa_group_jid TEXT NOT NULL,
+  job_id INTEGER,
+  question TEXT NOT NULL,
+  options TEXT NOT NULL,
+  draft_ids TEXT NOT NULL,
+  secret TEXT NOT NULL,
+  answered_at INTEGER,
+  created_at INTEGER NOT NULL
+);
 `);
 
 // Columns added after the first release.
@@ -325,6 +338,41 @@ export function getBotMessage(waMsgId: string): { job_id: number; expense_ids: n
     | { job_id: number; expense_ids: string }
     | undefined;
   return row && { job_id: row.job_id, expense_ids: JSON.parse(row.expense_ids) };
+}
+
+// ── Polls ───────────────────────────────────────────────────────
+
+export interface PollRow {
+  wa_msg_id: string;
+  wa_group_jid: string;
+  job_id: number | null;
+  question: string;
+  options: string[];
+  draft_ids: number[];
+  secret: Buffer;
+  answered_at: number | null;
+}
+
+export function savePoll(p: Omit<PollRow, 'answered_at'>) {
+  db.prepare(
+    'INSERT OR REPLACE INTO polls (wa_msg_id, wa_group_jid, job_id, question, options, draft_ids, secret, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(p.wa_msg_id, p.wa_group_jid, p.job_id, p.question, JSON.stringify(p.options), JSON.stringify(p.draft_ids), p.secret.toString('base64'), Date.now());
+}
+
+export function getPoll(waMsgId: string): PollRow | undefined {
+  const row = db.prepare('SELECT * FROM polls WHERE wa_msg_id = ?').get(waMsgId) as Record<string, any> | undefined;
+  if (!row) return undefined;
+  return {
+    ...row,
+    options: JSON.parse(row.options),
+    draft_ids: JSON.parse(row.draft_ids),
+    secret: Buffer.from(row.secret, 'base64'),
+  } as PollRow;
+}
+
+/** First vote wins: returns false if someone already answered this poll. */
+export function markPollAnswered(waMsgId: string): boolean {
+  return db.prepare('UPDATE polls SET answered_at = ? WHERE wa_msg_id = ? AND answered_at IS NULL').run(Date.now(), waMsgId).changes > 0;
 }
 
 export function stats() {

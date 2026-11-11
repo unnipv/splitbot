@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { computeShares, SplitError, type ExpenseSpec } from '../src/split.ts';
+import { computeShares, expandItems, SplitError, type ExpenseSpec } from '../src/split.ts';
 
 const base = (over: Partial<ExpenseSpec>): ExpenseSpec => ({
   description: 'x',
@@ -98,4 +98,47 @@ test('items only some people had are expanded with proportional tax', async () =
   const owed = Object.fromEntries(computeShares(spec).map((u) => [u.user_id, Number(u.owed_share)]));
   assert.ok(Math.abs(owed[4] - 476.69) < 0.02, `non-drinker ${owed[4]}`);
   assert.ok(Math.abs(owed[1] - 617.93) < 0.02, `drinker ${owed[1]}`);
+});
+
+test('itemised bill with tax-inclusive prices and a pre-tax subtotal (Thai VAT receipt)', () => {
+  const all = [1, 2, 3, 4, 5, 6, 7];
+  const spec = expandItems({
+    description: 'Lunch',
+    cost: 1507,
+    currency: 'THB',
+    payers: [{ user_id: 3 }],
+    split: {
+      type: 'equal',
+      participants: all.map((user_id) => ({ user_id })),
+      subtotal: 1408.41, // "Net Total" before VAT, while the item prices already include VAT
+      items: [
+        { name: 'Fries', amount: 145, user_ids: all },
+        { name: 'Coke', amount: 89, user_ids: all },
+        { name: 'Samurai', amount: 556, user_ids: [3, 4, 5, 6] },
+        { name: 'Quarter Bacon', amount: 717, user_ids: [1, 2, 7] },
+      ],
+    },
+  });
+  const owed = Object.fromEntries(computeShares(spec).map((s) => [s.user_id, Number(s.owed_share)]));
+  assert.equal(Math.round(Object.values(owed).reduce((a, b) => a + b, 0) * 100), 150700);
+  assert.ok(Math.abs(owed[1] - (234 / 7 + 239)) < 0.02, String(owed[1]));
+  assert.ok(Math.abs(owed[3] - (234 / 7 + 139)) < 0.02, String(owed[3]));
+});
+
+test('items that exactly cover the bill never overshoot through rounding', () => {
+  const spec = expandItems({
+    description: 'x',
+    cost: 100,
+    currency: 'INR',
+    payers: [{ user_id: 1 }],
+    split: { type: 'equal', participants: [1, 2, 3].map((user_id) => ({ user_id })), subtotal: 100, items: [{ amount: 100, user_ids: [1, 2, 3] }] },
+  });
+  assert.deepEqual(computeShares(spec).map((s) => s.owed_share).sort(), ['33.33', '33.33', '33.34']);
+});
+
+test('items larger than the bill explain the mismatch', () => {
+  assert.throws(
+    () => expandItems({ description: 'x', cost: 1000, currency: 'INR', payers: [{ user_id: 1 }], split: { type: 'equal', participants: [{ user_id: 1 }], items: [{ name: 'Beer', amount: 1200, user_ids: [1] }] } }),
+    /add up to 1200\.00 \(Beer 1200\.00\).*200\.00 too much/,
+  );
 });
