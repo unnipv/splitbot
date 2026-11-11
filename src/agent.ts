@@ -116,7 +116,8 @@ const TOOLS: ToolDef[] = [
     function: {
       name: 'create_expense',
       description:
-        'Record one expense. Call once per distinct expense. Becomes a draft awaiting the user\'s "yes" when needs_confirmation is true.',
+        'Record one expense. Call once per distinct expense. Becomes a draft awaiting the user\'s "yes" when needs_confirmation is true. ' +
+        'Only when you can build the split the user asked for; never as a placeholder (e.g. equal) while asking how to split.',
       parameters: {
         type: 'object',
         required: ['description', 'cost', 'currency', 'payers', 'split', 'assumptions', 'needs_confirmation'],
@@ -138,7 +139,9 @@ const TOOLS: ToolDef[] = [
           },
           question: {
             type: 'string',
-            description: 'With needs_confirmation: the one short, specific question for the group, e.g. "Is Devu = Dev Nair?"',
+            description:
+              'With needs_confirmation: one short yes/no check of your best guess, e.g. "Is Devu = Dev Nair?". ' +
+              'If you need their answer to build the split at all (who had which items, who was there), do NOT call create_expense — call ask_user instead.',
           },
           options: pollOptions,
         },
@@ -267,7 +270,8 @@ Understanding expenses:
 Being careful — three outcomes:
 1. Clear (stated explicitly, or only the standard defaults "sender paid, everyone split" apply) → create_expense with needs_confirmation=false. It goes straight to Splitwise.
 2. You can make a reasonable best guess but made a real judgment call → create_expense with needs_confirmation=true and put the one specific question in its "question" field, so people can just say "yes" or correct it. Judgment calls include: a name that could match more than one member or matches none well; unclear who was included ("we", "the boys", "those who came"); unclear payer when the sender isn't linked; a bill with several possible totals, a cut-off/blurry total, or a currency you guessed; a text amount that disagrees with the bill; anything you inferred that wasn't said.
-3. Essential info is missing and there's no sensible guess (no amount, no idea who paid) → don't create anything; call ask_user with one short, specific question.
+3. Essential info is missing, or the answer would change who owes what (no amount, no idea who paid, "split by what they ate" without saying who had which items, unclear who was there) → don't create anything; call ask_user with one short, specific question. Never record a placeholder split (e.g. equal) while asking how to split it.
+- Rule of thumb: draft + question only when you expect the answer to be "yes" (confirming your best guess). If you'd need their answer to build the split, ask first.
 - If create_expense returns an error, fix the spec and retry once. If you can't fix it, call ask_user: say what doesn't add up (with the numbers), propose the most likely fix, and ask. Never resend the same spec.
 - Use "options" (a WhatsApp poll) when the answer is a pick between a few concrete choices; otherwise people just reply.
 - Always fill "assumptions" with each default/inference you applied that the message didn't state (e.g. "you paid", "split among all 4", "currency THB from bill", "Devu = Dev Nair"). Don't list things the message said explicitly, and don't mention the default currency.
@@ -323,7 +327,7 @@ function parseSpec(raw: any, ctx: GroupCtx): ExpenseSpec {
       })),
       subtotal: raw.split?.subtotal ? Number(raw.split.subtotal) : undefined,
       items: Array.isArray(raw.split?.items)
-        ? raw.split.items.map((it: any) => ({ name: it.name, amount: Number(it.amount), user_ids: (it.user_ids ?? []).map(Number) }))
+        ? raw.split.items.map((it: any) => ({ name: it.name, amount: Number(it.amount), user_ids: (it.user_ids ?? []).map((u: any) => Number(u?.user_id ?? u)) }))
         : undefined,
     },
   };
@@ -406,6 +410,9 @@ function earlierContext(jobId: number): string {
   if (!user) user = `${job.sender_name ?? 'Someone'}: ${job.text ?? ''}`;
   return `${user.slice(-6000)}\nYou replied: ${(job.reply ?? '').slice(0, 1500)}`;
 }
+
+/** Messages asking for a split by who ate/had what. */
+const ITEM_SPLIT = /\b(items?|ate|eaten|what (they|we|each|everyone) (had|ate|ordered)|accordingly|based on (what|the items|items|consumption))\b/i;
 
 const FINAL_TOOLS = new Set(['create_expense', 'confirm_draft', 'discard_draft', 'update_expense', 'delete_expense', 'link_group']);
 
@@ -616,6 +623,10 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     const dryRun = !!input.dryRun;
     switch (name) {
       case 'create_expense': {
+        // "Split by what we ate" on a bill but no items given: that's a placeholder split; ask who had what first.
+        if (bills.length && !args.split?.items?.length && ITEM_SPLIT.test(input.text)) {
+          return { error: 'The user asked to split by items, but you gave no split.items. Do not record a placeholder — call ask_user to ask who had which items.' };
+        }
         const spec = parseSpec(args, ctx);
         const assumptions: string[] = Array.isArray(args.assumptions) ? args.assumptions.map(String).filter(Boolean) : [];
         // Models sometimes repeat a successful call; never record the same expense twice in one turn.
