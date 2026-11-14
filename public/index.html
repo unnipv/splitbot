@@ -2,100 +2,159 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
   <title>Splitbot</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💸</text></svg>" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <div class="brand">💸 Splitbot</div>
-    <nav>
-      <a href="#status">Status</a>
-      <a href="#groups">Groups</a>
-      <a href="#activity">Activity</a>
-      <a href="#playground">Playground</a>
-      <a href="#logs">Logs</a>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">💸</span>Splitbot</div>
+    <nav aria-label="Sections">
+      <a href="#home"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span class="lbl">Home</span></a>
+      <a href="#groups"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a6 6 0 0 1 12 0v1M16 3.5a4 4 0 0 1 0 7.5M22 21v-1a6 6 0 0 0-4-5.6"/></svg><span class="lbl">Groups</span><span class="badge" id="badge-groups" hidden></span></a>
+      <a href="#expenses"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2zM9 8h6M9 12h6M9 16h4"/></svg><span class="lbl">Expenses</span><span class="badge" id="badge-expenses" hidden></span></a>
+      <a href="#activity"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span class="lbl">Activity</span></a>
+      <a href="#playground"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><span class="lbl"><span class="lbl-l">Playground</span><span class="lbl-s">Try</span></span></a>
+      <a href="#settings"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4"/></svg><span class="lbl">Settings</span></a>
+      <a href="#logs"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 10l3 2-3 2M13 15h3"/></svg><span class="lbl">Logs</span></a>
     </nav>
-    <div class="pills"><span id="pill-wa" class="pill">WhatsApp…</span><span id="pill-sw" class="pill">Splitwise…</span></div>
+    <div class="pills"><span id="pill-wa" class="pill">WhatsApp</span><span id="pill-sw" class="pill">Splitwise</span></div>
   </header>
 
-  <main>
-    <!-- Status -->
-    <section id="view-status" class="view">
+  <main id="main" tabindex="-1">
+    <!-- Home -->
+    <section id="view-home" class="view" aria-labelledby="h-home">
+      <h1 id="h-home" class="vh">Home</h1>
+      <div id="attention" class="attention" hidden></div>
+      <div id="kpis" class="kpis"></div>
+
+      <div class="charts">
+        <div class="card chart-card">
+          <div class="card-h"><h2>Messages per day</h2><div class="legend" id="lg-jobs"></div></div>
+          <div class="chart" id="ch-jobs"></div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-h"><h2>Response time</h2><div class="legend" id="lg-lat"></div></div>
+          <div class="chart" id="ch-lat"></div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-h"><h2>LLM spend per day</h2><div class="legend" id="lg-spend"></div></div>
+          <div class="chart" id="ch-spend"></div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-h"><h2>Model usage</h2><span class="muted small">last 14 days</span></div>
+          <div id="models-body"></div>
+        </div>
+      </div>
+
+      <h2 class="section-title">Connections</h2>
       <div class="grid">
-        <div class="card">
-          <h2>WhatsApp</h2>
-          <div id="wa-body"></div>
-        </div>
-        <div class="card">
-          <h2>Splitwise</h2>
-          <div id="sw-body"></div>
-        </div>
-        <div class="card">
-          <h2>Models</h2>
-          <div id="llm-body"></div>
-        </div>
-        <div class="card">
-          <h2>Numbers</h2>
-          <div id="stats-body"></div>
-        </div>
+        <div class="card"><div class="card-h"><h2>WhatsApp</h2></div><div id="wa-body"></div></div>
+        <div class="card"><div class="card-h"><h2>Splitwise</h2></div><div id="sw-body"></div></div>
+        <div class="card"><div class="card-h"><h2>Models &amp; triggers</h2><a class="small" href="#settings">Change</a></div><div id="llm-body"></div></div>
       </div>
     </section>
 
     <!-- Groups -->
-    <section id="view-groups" class="view">
-      <div class="card">
-        <h2>WhatsApp groups</h2>
-        <p class="muted">Groups the bot number is in. Link each to a Splitwise group (or let people say <em>“@bot use Goa Trip”</em> in the chat).</p>
-        <div id="groups-body"></div>
+    <section id="view-groups" class="view" aria-labelledby="h-groups">
+      <div class="page-h">
+        <h1 id="h-groups">Groups</h1>
+        <p class="muted">Chats the bot number is in. Link each to a Splitwise group, or let people say <em>“@bot use Goa Trip”</em> in the chat.</p>
       </div>
-      <div class="card" id="members-card" hidden>
-        <h2 id="members-title">Members</h2>
-        <p class="muted">Who is who. The bot links people automatically when names clearly match; fix anything here.</p>
-        <div id="members-body"></div>
+      <div id="groups-body"></div>
+    </section>
+
+    <!-- Expenses -->
+    <section id="view-expenses" class="view" aria-labelledby="h-expenses">
+      <div class="page-h"><h1 id="h-expenses">Expenses</h1></div>
+      <div class="card">
+        <div class="card-h"><h2>Waiting for confirmation <span class="count" id="drafts-count"></span></h2></div>
+        <div id="drafts-body"></div>
+      </div>
+      <div class="card">
+        <div class="card-h">
+          <h2>Recent expenses</h2>
+          <label class="inline-field"><span class="vh">Filter by group</span><select id="exp-group" aria-label="Filter by group"><option value="">All groups</option></select></label>
+        </div>
+        <div id="expenses-body"></div>
       </div>
     </section>
 
     <!-- Activity -->
-    <section id="view-activity" class="view">
+    <section id="view-activity" class="view" aria-labelledby="h-activity">
+      <h1 id="h-activity" class="vh">Activity</h1>
       <div class="split">
         <div class="card list-card">
-          <h2>Messages handled</h2>
-          <div id="jobs-body"></div>
+          <div class="card-h"><h2>Messages handled</h2><a class="small" id="eval-dl" href="/api/eval-cases" download="eval-cases.json">Download flagged cases</a></div>
+          <div class="filters">
+            <select id="af-status" aria-label="Status">
+              <option value="">Any status</option><option value="running">Running</option><option value="done">Done</option><option value="error">Error</option><option value="rejected">Blocked</option>
+            </select>
+            <select id="af-group" aria-label="Group"><option value="">All groups</option></select>
+            <input id="af-q" type="search" placeholder="Search messages" aria-label="Search messages" />
+            <label class="check"><input type="checkbox" id="af-flagged" /> Flagged only</label>
+          </div>
+          <div id="jobs-body" aria-live="polite"></div>
         </div>
-        <div class="card" id="job-detail">
-          <p class="muted">Select a message to see what the bot did.</p>
-        </div>
+        <div class="card detail" id="job-detail" aria-label="Message detail"></div>
       </div>
     </section>
 
     <!-- Playground -->
-    <section id="view-playground" class="view">
-      <div class="card">
-        <h2>Playground</h2>
-        <p class="muted">Talk to the agent as if you were in a group. Dry run shows what would happen without touching Splitwise.</p>
-        <form id="sim-form">
-          <label>Group <select name="group_jid" required></select></label>
-          <label>Sender <select name="sender_contact_id"><option value="">You</option></select></label>
-          <label class="wide">Message <textarea name="text" rows="3" placeholder="dinner 2400, I paid, split with everyone except Rahul"></textarea></label>
-          <label>Bill photo <input type="file" name="image" accept="image/*" /></label>
-          <label class="check"><input type="checkbox" name="dry_run" checked /> Dry run</label>
-          <button type="submit">Send</button>
+    <section id="view-playground" class="view" aria-labelledby="h-playground">
+      <div class="card pg" id="pg-card">
+        <div class="card-h">
+          <h2 id="h-playground">Playground</h2>
+          <button type="button" class="ghost small-btn" id="pg-clear">Clear chat</button>
+        </div>
+        <div class="pg-controls">
+          <label class="field"><span>Group</span><select id="pg-group"></select></label>
+          <label class="field"><span>Sender</span><select id="pg-sender"><option value="">You</option></select></label>
+          <label class="switch"><input type="checkbox" id="pg-dry" checked /><span>Dry run</span></label>
+        </div>
+        <div class="live-warn" id="pg-live" hidden role="alert"><b>Live mode.</b> Real expenses will be created in Splitwise.</div>
+        <div class="thread" id="pg-thread" aria-live="polite"></div>
+        <div class="chips" id="pg-chips"></div>
+        <form class="composer" id="pg-form">
+          <label class="icon-btn attach" title="Attach bill photo">
+            <input type="file" id="pg-file" accept="image/*" aria-label="Attach bill photo" />
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/></svg>
+          </label>
+          <textarea id="pg-text" rows="1" placeholder="dinner 2400, I paid, split with everyone except Rahul" aria-label="Message"></textarea>
+          <button type="submit" class="primary icon-btn" id="pg-send" aria-label="Send"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-2-7z"/></svg></button>
         </form>
-        <pre id="sim-out" class="reply" hidden></pre>
       </div>
     </section>
 
+    <!-- Settings -->
+    <section id="view-settings" class="view" aria-labelledby="h-settings">
+      <div class="page-h">
+        <h1 id="h-settings">Settings</h1>
+        <p class="muted">Changes apply live, no restart. Reset puts a value back to its <code>.env</code> default.</p>
+      </div>
+      <form id="settings-form" novalidate></form>
+    </section>
+
     <!-- Logs -->
-    <section id="view-logs" class="view">
+    <section id="view-logs" class="view" aria-labelledby="h-logs">
       <div class="card">
-        <h2>Live logs <label class="check small"><input type="checkbox" id="log-debug" /> debug</label></h2>
-        <div id="logs-body" class="logs"></div>
+        <div class="card-h">
+          <h2 id="h-logs">Live logs <span class="muted small" id="log-count"></span></h2>
+        </div>
+        <div class="filters">
+          <input id="log-filter" type="search" placeholder="Filter" aria-label="Filter logs" />
+          <label class="check"><input type="checkbox" id="log-debug" /> Debug</label>
+          <button type="button" id="log-pause" aria-pressed="false">Pause</button>
+        </div>
+        <div id="logs-body" class="logs" role="log"></div>
       </div>
     </section>
   </main>
 
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
   <script src="app.js" type="module"></script>
 </body>
 </html>
