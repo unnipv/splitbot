@@ -98,6 +98,8 @@ const scenarios: Scenario[] = [
     expect: [{ cost: 242286, currency: 'INR', paid: eq(all, 242286), owed: eq(all, 242286) }],
   },
   { name: 'missing amount → ask', text: 'add lunch for those who came', expect: [] },
+  { name: 'settle up', text: `I paid ${A} 500 back`, expect: [{ cost: 500, paid: { [meId]: 500 }, owed: { [byName(A)]: 500 }, draft: false }] },
+  { name: 'settle up, other way', text: `${B} gpayed me 1200`, expect: [{ cost: 1200, paid: { [byName(B)]: 1200 }, owed: { [meId]: 1200 } }] },
 ];
 if (args.bill) {
   scenarios.push(
@@ -167,9 +169,18 @@ for (const modelArg of args.models!.split(',')) {
           dryRun: true,
         });
         const recorded: Recorded[] = (res.trace as any[])
-          .filter((t) => t.step === 'tool' && t.name === 'create_expense' && t.result?.ok && !t.result.note)
+          .filter((t) => t.step === 'tool' && ['create_expense', 'record_payment'].includes(t.name) && t.result?.ok && !t.result.note)
           .map((t) => {
             const a = JSON.parse(t.args);
+            if (t.name === 'record_payment') {
+              const spec = {
+                cost: a.amount,
+                currency: a.currency ?? config.bot.defaultCurrency,
+                payers: [{ user_id: a.from_user_id }],
+                split: { type: 'exact', participants: [{ user_id: a.to_user_id, value: a.amount }] },
+              };
+              return { spec, draft: !!t.result.draft_id };
+            }
             return { spec: { ...a, split: { ...a.split } }, draft: !!t.result.draft_id };
           });
         verdict = check(sc, recorded, res.reply);

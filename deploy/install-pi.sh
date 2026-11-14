@@ -21,6 +21,11 @@ mkdir -p data && chmod 700 data  # WhatsApp session + Splitwise token live here
 [ -f .env ] || { cp .env.example .env; echo "⚠️  Created .env from .env.example — fill it in."; }
 chmod 600 .env
 
+# Where the bot keeps its state (DATA_DIR in .env, default ./data); the only place the service may write.
+DATA_DIR_SETTING=$(grep -E '^DATA_DIR=' .env | cut -d= -f2 || true)
+DATA_PATH=$(realpath -m "${DATA_DIR_SETTING:-./data}")
+mkdir -p "$DATA_PATH" && chmod 700 "$DATA_PATH"
+
 echo "→ Installing systemd service"
 sudo tee /etc/systemd/system/splitbot.service >/dev/null <<EOF
 [Unit]
@@ -35,9 +40,22 @@ WorkingDirectory=${APP_DIR}
 ExecStart=$(command -v node) src/index.ts
 Restart=always
 RestartSec=5
+# On stop the bot finishes the messages it is handling (up to 25s) before exiting.
+TimeoutStopSec=40
 Environment=NODE_ENV=production
 # Keep memory in check on small Pis
 Environment=NODE_OPTIONS=--max-old-space-size=256
+# Sandbox: the service can read the system and its own folder, and write only to its data folder.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=${DATA_PATH}
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

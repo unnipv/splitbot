@@ -12,6 +12,8 @@ export interface ExpenseSpec {
   date?: string;
   category?: string;
   notes?: string;
+  /** A settle-up ("Rahul paid me back 500"): payers = who sent the money, the one participant = who received it. */
+  payment?: boolean;
   /** Who paid. One payer with no amount = paid everything. Several without amounts = paid equally. */
   payers: { user_id: number; amount?: number }[];
   split: {

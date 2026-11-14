@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.ts';
-import { logger } from './log.ts';
+import { bus, logger } from './log.ts';
 import { computeShares, currencyDecimals, type ExpenseSpec } from './split.ts';
 
 const log = logger('splitwise');
@@ -35,6 +35,9 @@ export interface SwExpense {
   currency_code: string;
   date: string;
   deleted_at: string | null;
+  group_id?: number | null;
+  payment?: boolean;
+  category?: { id: number; name: string };
   created_by?: { id: number; first_name: string };
   users: { user_id: number; user?: { first_name: string }; paid_share: string; owed_share: string }[];
 }
@@ -102,6 +105,9 @@ export function disconnect() {
 
 // ── HTTP ────────────────────────────────────────────────────────
 
+/** The request never got an answer, so for a write we cannot know whether it happened. Never retried automatically. */
+export class SplitwiseUnreachable extends Error {}
+
 async function call<T>(method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown> | FormData): Promise<T> {
   if (!accessToken) throw new Error('Splitwise is not connected — open the dashboard and connect it');
   const init: RequestInit = { method, headers: { Authorization: `Bearer ${accessToken}` } };
@@ -111,8 +117,21 @@ async function call<T>(method: 'GET' | 'POST', endpoint: string, body?: Record<s
     (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
   }
   const started = Date.now();
-  const res = await fetch(`${API}/${endpoint}`, init);
-  const text = await res.text();
+  // Without a timeout one stuck request would block every later message of the group (they are handled in order).
+  init.signal = AbortSignal.timeout(body instanceof FormData ? 45_000 : 20_000);
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(`${API}/${endpoint}`, init);
+    text = await res.text();
+  } catch (err) {
+    const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    throw new SplitwiseUnreachable(
+      method === 'GET'
+        ? `Splitwise ${timedOut ? 'did not answer in time' : 'could not be reached'} — try again in a moment`
+        : `Splitwise ${timedOut ? 'did not answer in time' : 'could not be reached'}. The change may or may not have gone through — check Splitwise before sending it again.`,
+    );
+  }
   let data: any;
   try {
     data = JSON.parse(text);
@@ -120,7 +139,10 @@ async function call<T>(method: 'GET' | 'POST', endpoint: string, body?: Record<s
     data = { raw: text.slice(0, 300) };
   }
   log.debug(`${method} ${endpoint} → ${res.status} (${Date.now() - started}ms)`);
-  if (res.status === 401) throw new Error('Splitwise token rejected (401) — reconnect Splitwise in the dashboard');
+  if (res.status === 401) {
+    bus.emit('alert', { key: 'splitwise-401', text: '🔑 Splitbot: Splitwise rejected the token. Reconnect Splitwise on the dashboard — no expenses can be added until then.' });
+    throw new Error('Splitwise token rejected (401) — reconnect Splitwise in the dashboard');
+  }
   if (!res.ok) throw new Error(`Splitwise ${endpoint} failed (${res.status}): ${JSON.stringify(data.errors ?? data).slice(0, 300)}`);
   const errors = data.errors && (Array.isArray(data.errors) ? data.errors : Object.values(data.errors).flat());
   if (errors?.length) throw new Error(`Splitwise rejected the request: ${errors.join('; ')}`);
@@ -170,9 +192,35 @@ function matchCategory(name: string | undefined, cats: { id: number; name: strin
     cats.find((c) => c.name.toLowerCase().includes(n)))?.id;
 }
 
-export async function listExpenses(groupId: number, limit = 15): Promise<SwExpense[]> {
+const expenseListCache = new Map<number, { at: number; limit: number; list: SwExpense[] }>();
+
+export async function listExpenses(groupId: number, limit = 15, maxAgeMs = 0): Promise<SwExpense[]> {
+  const hit = expenseListCache.get(groupId);
+  if (hit && hit.limit >= limit && Date.now() - hit.at < maxAgeMs) return hit.list.slice(0, limit);
   const { expenses } = await call<{ expenses: SwExpense[] }>('GET', `get_expenses?group_id=${groupId}&limit=${limit}`);
-  return expenses.filter((e) => !e.deleted_at);
+  const list = expenses.filter((e) => !e.deleted_at);
+  expenseListCache.set(groupId, { at: Date.now(), limit, list });
+  return list;
+}
+
+export async function getExpense(id: number): Promise<SwExpense> {
+  return (await call<{ expense: SwExpense }>('GET', `get_expense/${id}`)).expense;
+}
+
+function changed(groupId: number) {
+  groupCache.delete(groupId);
+  expenseListCache.delete(groupId);
+}
+
+/** Does what Splitwise stored match what we computed? Compared per person, to the minor unit. */
+export function sharesMatch(expense: SwExpense | undefined, shares: { user_id: number; paid_share: string; owed_share: string }[]): boolean {
+  if (!expense?.users) return true; // nothing to compare against
+  const stored = new Map(expense.users.map((u) => [u.user_id, u]));
+  const same = (a: string | undefined, b: string) => Math.abs(Number(a ?? 0) - Number(b)) < 0.005;
+  return (
+    shares.every((s) => same(stored.get(s.user_id)?.paid_share, s.paid_share) && same(stored.get(s.user_id)?.owed_share, s.owed_share)) &&
+    expense.users.every((u) => shares.some((s) => s.user_id === u.user_id) || (Number(u.paid_share) === 0 && Number(u.owed_share) === 0))
+  );
 }
 
 // ── Writes ──────────────────────────────────────────────────────
@@ -194,13 +242,15 @@ async function expensePayload(spec: ExpenseSpec, groupId: number, addedBy?: stri
   const shares = computeShares(spec);
   const fields: Record<string, string> = {
     cost: spec.cost.toFixed(currencyDecimals(spec.currency)),
-    description: taggedDescription(spec.description),
+    description: spec.payment ? 'Payment' : taggedDescription(spec.description),
     currency_code: spec.currency,
     group_id: String(groupId),
   };
-  if (spec.date) fields.date = new Date(spec.date).toISOString();
+  if (spec.payment) fields.payment = 'true';
+  // Noon UTC keeps a plain calendar date on the same day in every timezone people open Splitwise in.
+  if (spec.date) fields.date = new Date(`${spec.date.slice(0, 10)}T12:00:00Z`).toISOString();
   fields.details = expenseDetails(spec, addedBy);
-  const categoryId = matchCategory(spec.category, await categories().catch(() => []));
+  const categoryId = spec.payment ? undefined : matchCategory(spec.category, await categories().catch(() => []));
   if (categoryId) fields.category_id = String(categoryId);
   shares.forEach((s, i) => {
     fields[`users__${i}__user_id`] = String(s.user_id);
@@ -230,22 +280,23 @@ export async function createExpense(
   try {
     res = await call('POST', 'create_expense', withReceipt(fields, receipt));
   } catch (err) {
-    if (!receipt) throw err;
+    // No answer means it may have been created: retrying could add it twice.
+    if (!receipt || err instanceof SplitwiseUnreachable) throw err;
     log.warn('create_expense with receipt failed, retrying without it', String(err));
     res = await call('POST', 'create_expense', fields);
   }
-  groupCache.delete(groupId);
-  return { expense: res.expenses[0], shares };
+  changed(groupId);
+  return { expense: res.expenses[0], shares, verified: sharesMatch(res.expenses[0], shares) };
 }
 
 export async function updateExpense(id: number, spec: ExpenseSpec, groupId: number, addedBy?: string) {
   const { fields, shares } = await expensePayload(spec, groupId, addedBy);
   const res = await call<{ expenses: SwExpense[] }>('POST', `update_expense/${id}`, fields);
-  groupCache.delete(groupId);
-  return { expense: res.expenses[0], shares };
+  changed(groupId);
+  return { expense: res.expenses[0], shares, verified: sharesMatch(res.expenses[0], shares) };
 }
 
 export async function deleteExpense(id: number, groupId?: number) {
   await call<{ success: boolean }>('POST', `delete_expense/${id}`);
-  if (groupId) groupCache.delete(groupId);
+  if (groupId) changed(groupId);
 }

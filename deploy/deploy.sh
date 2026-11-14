@@ -26,6 +26,9 @@ fi
 if ssh "$HOST" "systemctl list-unit-files splitbot.service >/dev/null 2>&1 && systemctl is-enabled splitbot >/dev/null 2>&1"; then
   ssh "$HOST" "cd $DIR && npm ci --omit=dev --no-audit --no-fund && sudo systemctl restart splitbot"
   echo "✅ Deployed and restarted"
+  if ! ssh "$HOST" "grep -q NoNewPrivileges /etc/systemd/system/splitbot.service"; then
+    echo "ℹ️  The service on the Pi predates the sandboxed unit. To update it, run on the Pi: cd $DIR && ./deploy/install-pi.sh"
+  fi
 else
   echo "→ First install"
   ssh "$HOST" "cd $DIR && ./deploy/install-pi.sh"

@@ -14,7 +14,7 @@ export interface Rejection {
 
 // Anything plausibly about money in the group. Kept generous: false negatives just cost one cheap LLM call.
 const RELEVANT =
-  /\d|₹|\$|€|£|฿|¥|\b(paid|pay|pays|paying|owe[sd]?|owing|split|share|expense|bill|cost|spent|spend|total|amount|balance|settle|who owes|undo|delete|remove|cancel|wrong|fix|change|update|correct|use|link|equally|everyone|except|without|half|each|rupees?|rs|inr|baht|thb|usd|eur|dollars?|euros?|added|draft)\b/i;
+  /\d|₹|\$|€|£|฿|¥|\b(paid|pay|pays|paying|owe[sd]?|owing|split|share|expense|bill|cost|spent|spend|total|amount|balance|settle|who owes|undo|delete|remove|cancel|wrong|fix|change|update|correct|use|link|equally|everyone|except|without|half|each|rupees?|rs|inr|baht|thb|usd|eur|dollars?|euros?|added|draft|balances?|help|summary|totals?|digest|settled?|payment|remember|commands?|kanakku|gpay(ed)?|upi|transferred|sent)\b/i;
 
 const strikes = new Map<string, { count: number; since: number }>();
 

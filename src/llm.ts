@@ -6,7 +6,11 @@ const log = logger('llm');
 
 /** Minimal OpenAI-compatible chat client: works with Groq, OpenRouter, Gemini's OpenAI endpoint, DeepInfra, vLLM, Ollama… */
 
-export type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  /** OpenRouter's PDF input: a data URL the provider parses into text/images for the model. */
+  | { type: 'file'; file: { filename: string; file_data: string } };
 
 export type ChatMessage =
   | { role: 'system' | 'user'; content: string | ContentPart[] }
@@ -29,6 +33,8 @@ interface ChatOptions {
   temperature?: number;
   /** Output cap; defaults high because reasoning models spend output tokens thinking. */
   maxTokens?: number;
+  /** How long a model that has a fallback behind it may take (default LLM_TIMEOUT_MS). The last model gets 90s. */
+  timeoutMs?: number;
 }
 
 export interface ChatResult {
@@ -106,7 +112,8 @@ async function callModel(ref: ModelRef, messages: ChatMessage[], opts: ChatOptio
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(90_000),
+        // A stuck primary model must not hold the whole group up: only the last resort gets the long wait.
+        signal: AbortSignal.timeout(isLast ? 90_000 : (opts.timeoutMs ?? config.llm.timeoutMs)),
       });
     } catch (err) {
       if (!isLast) throw new SkipModel(`network error: ${err instanceof Error ? err.message : err}`);
@@ -139,6 +146,7 @@ async function callModel(ref: ModelRef, messages: ChatMessage[], opts: ChatOptio
     log.debug(`${ref.id} ${Date.now() - started}ms`, data.usage);
     const u = data.usage ?? {};
     recordUsage(ref.id, u.prompt_tokens ?? 0, u.completion_tokens ?? 0, Number(u.cost) || 0);
+    if (data.usage) data.usage.ms = Date.now() - started;
     // An empty reply is fine (the agent is told to stay quiet after recording); one cut off mid-reasoning is not.
     if (!content && !toolCalls.length && choice.finish_reason === 'length') {
       throw new Error(`${ref.id} ran out of tokens while reasoning`);
@@ -154,6 +162,27 @@ function stripThinking(s: string) {
 export const agentModels = () => config.llm.agent;
 export const visionModels = () => config.llm.vision;
 export const roastModels = () => config.llm.roast;
+
+/** Voice note → text with Groq's Whisper. Whisper detects the language itself (English, Malayalam, Hindi, mixed). */
+export async function transcribe(audio: { data: Buffer; mime: string }): Promise<string> {
+  const key = PROVIDERS.groq.apiKey;
+  if (!key) throw new Error('Voice notes need GROQ_API_KEY (they are transcribed with Whisper on Groq)');
+  const mime = audio.mime.split(';')[0] || 'audio/ogg';
+  const form = new FormData();
+  form.append('model', config.llm.transcribeModel);
+  form.append('response_format', 'json');
+  form.append('temperature', '0');
+  form.append('file', new Blob([new Uint8Array(audio.data)], { type: mime }), `voice.${mime.split('/')[1] ?? 'ogg'}`);
+  const res = await fetch(`${PROVIDERS.groq.baseUrl}/audio/transcriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: form,
+    signal: AbortSignal.timeout(45_000),
+  });
+  const data = (await res.json().catch(() => ({}))) as { text?: string; error?: { message?: string } };
+  if (!res.ok) throw new Error(`Transcription failed (${res.status}): ${data.error?.message ?? 'unknown error'}`.slice(0, 300));
+  return (data.text ?? '').trim();
+}
 
 /** Parse JSON that a model may have wrapped in a ```json fence or surrounded with prose. */
 export function looseJson<T = unknown>(s: string): T {

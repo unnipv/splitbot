@@ -40,7 +40,24 @@ const Env = z.object({
   // Above this (USD/day, OpenRouter-reported), only free providers are used.
   DAILY_BUDGET_USD: z.coerce.number().default(0.5),
 
+  // Non-last models in a chain get this long before the next one is tried (the last one gets 90s).
+  LLM_TIMEOUT_MS: z.coerce.number().default(30_000),
+  // Read each bill with two vision models at once and draft the expense when their totals disagree.
+  VISION_CROSSCHECK: z.enum(['true', 'false']).default('true'),
+  // Groq Whisper model for voice notes.
+  TRANSCRIBE_MODEL: z.string().default('whisper-large-v3'),
+  // Largest photo / PDF / voice note the bot will download.
+  MAX_MEDIA_MB: z.coerce.number().default(10),
+  // Remind the group once about drafts nobody confirmed after this many hours (0 = never).
+  NUDGE_AFTER_HOURS: z.coerce.number().default(3),
+  // Local hour (0-23) for the nightly digest in groups that turned it on.
+  DIGEST_HOUR: z.coerce.number().default(21),
+  // Optional URL that gets a plain-text POST when something needs the owner (works with ntfy.sh topics).
+  ALERT_WEBHOOK: z.string().optional(),
+
   PORT: z.coerce.number().default(3000),
+  // Interface the dashboard listens on. Default: all interfaces when a real password is set, otherwise loopback only.
+  HOST: z.string().optional(),
   DASHBOARD_USER: z.string().default('admin'),
   DASHBOARD_PASSWORD: z.string().default(''),
   DATA_DIR: z.string().default('./data'),
@@ -51,6 +68,7 @@ const raw = Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !
 const env = Env.parse(raw);
 
 const dataDir = path.resolve(env.DATA_DIR);
+const weakPassword = !env.DASHBOARD_PASSWORD || env.DASHBOARD_PASSWORD === 'change-me';
 
 export const PROVIDERS = {
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', apiKey: env.OPENROUTER_API_KEY },
@@ -125,6 +143,15 @@ export const config = {
     agent: parseModels(env.AGENT_MODELS ?? defaultAgent),
     vision: parseModels(env.VISION_MODELS ?? defaultVision),
     roast: parseModels(env.ROAST_MODELS ?? defaultRoast),
+    /** The same three chains as text, as shown and edited on the dashboard. */
+    chains: {
+      agent: env.AGENT_MODELS ?? defaultAgent,
+      vision: env.VISION_MODELS ?? defaultVision,
+      roast: env.ROAST_MODELS ?? defaultRoast,
+    },
+    timeoutMs: env.LLM_TIMEOUT_MS,
+    visionCrosscheck: env.VISION_CROSSCHECK === 'true',
+    transcribeModel: env.TRANSCRIBE_MODEL,
   },
   bot: {
     triggers: env.BOT_TRIGGERS.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean),
@@ -135,6 +162,9 @@ export const config = {
     confirmMode: env.CONFIRM_MODE,
     expenseTag: env.EXPENSE_TAG.trim(),
     denialStyle: env.DENIAL_STYLE,
+    nudgeAfterHours: env.NUDGE_AFTER_HOURS,
+    digestHour: env.DIGEST_HOUR,
+    alertWebhook: env.ALERT_WEBHOOK,
   },
   limits: {
     perPerson10Min: env.LIMIT_PER_PERSON_10MIN,
@@ -142,11 +172,15 @@ export const config = {
     perGroupDay: env.LIMIT_PER_GROUP_DAY,
     maxChars: env.MAX_MESSAGE_CHARS,
     dailyBudgetUsd: env.DAILY_BUDGET_USD,
+    maxMediaBytes: env.MAX_MEDIA_MB * 1024 * 1024,
   },
   web: {
     port: env.PORT,
     user: env.DASHBOARD_USER,
     password: env.DASHBOARD_PASSWORD,
+    /** Empty or still the example value: the dashboard then only listens on loopback. */
+    weakPassword,
+    host: env.HOST ?? (weakPassword ? '127.0.0.1' : '0.0.0.0'),
   },
   dataDir,
   waAuthDir: path.join(dataDir, 'wa-auth'),

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run ON the Pi (install-pi.sh calls it). Makes an unattended Pi recover by itself:
+# Optional. Run ON the Pi yourself, once, after install-pi.sh: ./deploy/harden-pi.sh
+# It changes system settings (watchdog reboots, Wi-Fi), so it is not run automatically. Makes an unattended Pi recover by itself:
 #  - persistent journal, so the cause of a crash survives the reboot
 #  - hardware watchdog: a frozen system is rebooted by the SoC
 #  - Wi-Fi power saving off (a common cause of Pi Wi-Fi dropouts)
